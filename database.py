@@ -192,6 +192,16 @@ class Database:
             conn.close()
             return [dict(r) for r in rows]
 
+    def search_animes(self, query: str) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            pattern = f"%{query.strip()}%"
+            cursor.execute("SELECT * FROM animes WHERE title LIKE ? OR genres LIKE ? ORDER BY id DESC;", (pattern, pattern))
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+
     def increment_views(self, anime_id: int):
         with self._lock:
             conn = self.get_connection()

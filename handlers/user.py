@@ -4,7 +4,12 @@ from aiogram.types import Message, CallbackQuery, InputMediaVideo, InputMediaPho
 from aiogram.filters import CommandStart, CommandObject
 
 from database import Database
-from keyboards import get_anime_card_kb, get_episode_grid_kb
+from keyboards import (
+    get_anime_card_kb,
+    get_episode_grid_kb,
+    get_start_kb,
+    get_anime_list_kb
+)
 from utils.tracker import watchers_tracker, get_fast_banner_cover
 
 user_router = Router()
@@ -69,23 +74,14 @@ async def start_handler(message: Message, command: CommandObject):
         except (IndexError, ValueError):
             pass
 
-    # Oddiy /start
-    animes = db.get_all_animes()
+    # Oddiy /start - Foydalanuvchiga faqat salomlashish va yashil qidiruv tugmasi
     text = (
         f"👋 Assalomu alaykum, <b>{user.first_name}</b>!\n\n"
         f"🎬 <b>Animem Uz</b> rasmiy anime botiga xush kelibsiz.\n"
-        f"Bu yerda sevimli animelaringizni eng yuqori sifatda tomosha qilishingiz mumkin.\n\n"
+        f"Bu yerda sevimli animelaringizni eng yuqori sifatda tomosha qilishingiz mumkin."
     )
-
-    if animes:
-        text += "🔥 <b>Mavjud animelar:</b>\n"
-        for a in animes[:10]:
-            ep_count = db.get_episode_count(a["id"])
-            text += f"• /start anime_{a['id']} — <b>{a['title']}</b> ({ep_count} ep)\n"
-    else:
-        text += "<i>Hozircha animelar yuklanmoqda...</i>"
-
-    sent_msg = await message.answer(text, parse_mode="HTML")
+    kb = get_start_kb()
+    sent_msg = await message.answer(text, parse_mode="HTML", reply_markup=kb)
     db.set_user_last_msg(user.id, sent_msg.message_id)
 
 async def send_anime_card(message: Message, anime_id: int):
@@ -333,19 +329,119 @@ async def back_to_card_callback(callback: CallbackQuery):
 
     await callback.answer()
 
+# --- 🔍 Animelarni qidirish menyusi (Ro'yxat ko'rinishi) ---
+@user_router.callback_query(F.data == "anime_search_menu")
+async def search_anime_menu_callback(callback: CallbackQuery):
+    animes = db.get_all_animes()
+    if not animes:
+        await callback.answer("Hozircha bazada animelar mavjud emas.", show_alert=True)
+        return
+
+    kb = get_anime_list_kb(animes, page=1)
+    text = (
+        "🔍 <b>Animelarni qidirish va tanlash</b>\n\n"
+        "Quyidagi ro'yxatdan tomosha qilmoqchi bo'lgan animengizni tanlang yoki uning yonidagi <b>'Ko'rish'</b> tugmasini bosing:\n\n"
+        "<i>Shuningdek, qidirayotgan anime nomini to'g'ridan-to'g'ri yozib yuborishingiz ham mumkin...</i>"
+    )
+
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        db.set_user_last_msg(callback.from_user.id, callback.message.message_id)
+    except Exception:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        sent_msg = await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+        db.set_user_last_msg(callback.from_user.id, sent_msg.message_id)
+
+    await callback.answer()
+
+# --- Animelar ro'yxatida sahifalash (Pagination) ---
+@user_router.callback_query(F.data.startswith("animelist_page_"))
+async def anime_list_page_callback(callback: CallbackQuery):
+    page = int(callback.data.split("_")[2])
+    animes = db.get_all_animes()
+    kb = get_anime_list_kb(animes, page=page)
+    text = (
+        "🔍 <b>Animelarni qidirish va tanlash</b>\n\n"
+        "Quyidagi ro'yxatdan tomosha qilmoqchi bo'lgan animengizni tanlang yoki uning yonidagi <b>'Ko'rish'</b> tugmasini bosing:\n\n"
+        "<i>Shuningdek, qidirayotgan anime nomini to'g'ridan-to'g'ri yozib yuborishingiz ham mumkin...</i>"
+    )
+
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        pass
+    await callback.answer()
+
+# --- Ro'yxatdan anime tanlanganda (Nom yoki Ko'rish bosilganda) ---
+@user_router.callback_query(F.data.startswith("open_anime_"))
+async def open_anime_callback(callback: CallbackQuery):
+    anime_id = int(callback.data.split("_")[2])
+
+    # Ro'yxat turgan xabarni o'chirib, o'rniga to'g'ridan-to'g'ri o'sha animeni ochamiz
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    await send_anime_card(callback.message, anime_id)
+    await callback.answer()
+
+# --- Bosh sahifaga qaytish ---
+@user_router.callback_query(F.data == "back_to_start")
+async def back_to_start_callback(callback: CallbackQuery):
+    user = callback.from_user
+    text = (
+        f"👋 Assalomu alaykum, <b>{user.first_name}</b>!\n\n"
+        f"🎬 <b>Animem Uz</b> rasmiy anime botiga xush kelibsiz.\n"
+        f"Bu yerda sevimli animelaringizni eng yuqori sifatda tomosha qilishingiz mumkin."
+    )
+    kb = get_start_kb()
+
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        db.set_user_last_msg(user.id, callback.message.message_id)
+    except Exception:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        sent_msg = await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+        db.set_user_last_msg(user.id, sent_msg.message_id)
+
+    await callback.answer()
+
 @user_router.callback_query(F.data == "noop")
 async def noop_callback(callback: CallbackQuery):
     await callback.answer()
 
-# --- Har qanday keraksiz xabarlarni darhol o'chirish ---
+# --- Matn orqali qidiruv yoki keraksiz xabarlarni tozalash ---
 @user_router.message()
-async def clean_unwanted_messages(message: Message):
+async def clean_or_search_messages(message: Message):
     """
-    Foydalanuvchi yozgan har qanday matn, stiker, rasm yoki buyruqlarni
-    chat toza turishi uchun avtomatik o'chirib tashlaydi.
+    Agar foydalanuvchi anime nomini qidirib matn yozsa, bazadan qidirib ro'yxat chiqaradi.
+    Boshqa barcha keraksiz narsalarni darhol o'chiradi.
     """
+    user_id = message.from_user.id
+    query = message.text.strip() if message.text else ""
+
+    # Har qanday holda user yozgan xabarni darhol o'chiramiz (tozalik uchun)
     try:
         await message.delete()
     except Exception:
         pass
+
+    if query and len(query) >= 2:
+        found = db.search_animes(query)
+        if found:
+            await clean_previous_bot_message(message.bot, message.chat.id, user_id)
+            kb = get_anime_list_kb(found, page=1)
+            text = (
+                f"🔍 <b>'{query}'</b> bo'yicha topilgan animelar:\n\n"
+                f"Tomosha qilmoqchi bo'lgan animengizni tanlang yoki 'Ko'rish' tugmasini bosing:"
+            )
+            sent_msg = await message.answer(text, parse_mode="HTML", reply_markup=kb)
+            db.set_user_last_msg(user_id, sent_msg.message_id)
 

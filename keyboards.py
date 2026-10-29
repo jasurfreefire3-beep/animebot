@@ -36,15 +36,89 @@ def get_finish_episodes_kb() -> ReplyKeyboardMarkup:
         resize_keyboard=True
     )
 
+def get_start_kb() -> InlineKeyboardMarkup:
+    """
+    Start xabari tagidagi yashil rangdagi '🔍 Animelarni qidirish' tugmasi
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔍 Animelarni qidirish",
+                    callback_data="anime_search_menu",
+                    style="success"
+                )
+            ]
+        ]
+    )
+
+def get_anime_list_kb(animes: list, page: int = 1, per_page: int = 6) -> InlineKeyboardMarkup:
+    """
+    '🔍 Animelarni qidirish' bosilganda chiqadigan animelar ro'yxati.
+    Har bir anime nomi va yonida '👁️ Ko'rish' yozuvli yashil tugma bo'ladi.
+    """
+    if not animes:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Bosh sahifaga qaytish", callback_data="back_to_start", style="danger")]
+            ]
+        )
+
+    total_animes = len(animes)
+    total_pages = max(1, math.ceil(total_animes / per_page))
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    page_animes = animes[start_idx:end_idx]
+
+    keyboard = []
+    for a in page_animes:
+        title = a["title"]
+        if len(title) > 22:
+            title = title[:20] + ".."
+        keyboard.append([
+            InlineKeyboardButton(text=f"🎬 {title}", callback_data=f"open_anime_{a['id']}"),
+            InlineKeyboardButton(text="👁️ Ko'rish", callback_data=f"open_anime_{a['id']}", style="success")
+        ])
+
+    # Sahifalash (agar 1 tadan ko'p sahifa bo'lsa)
+    if total_pages > 1:
+        nav_row = []
+        if page > 1:
+            nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"animelist_page_{page - 1}", style="primary"))
+        else:
+            nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data="noop", style="primary"))
+
+        nav_row.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop", style="success"))
+
+        if page < total_pages:
+            nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"animelist_page_{page + 1}", style="primary"))
+        else:
+            nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data="noop", style="primary"))
+
+        keyboard.append(nav_row)
+
+    # Bosh sahifaga qaytish tugmasi
+    keyboard.append([
+        InlineKeyboardButton(text="🔙 Bosh sahifaga qaytish", callback_data="back_to_start", style="danger")
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
 def get_anime_card_kb(anime_id: int, total_episodes: int) -> InlineKeyboardMarkup:
     """
     1-rasmdagi ko'rinish:
     Karta tagidagi katta yashil 'Tomosha qilish' tugmasi (style='success')
+    va '🔍 Boshqa animelar' tugmasi
     """
     ep_label = f"▶️ Tomosha qilish ( {total_episodes} epizod )" if total_episodes > 0 else "▶️ Tomosha qilish (Tez kunda)"
     buttons = [
         [
             InlineKeyboardButton(text=ep_label, callback_data=f"watch_{anime_id}_1", style="success")
+        ],
+        [
+            InlineKeyboardButton(text="🔍 Boshqa animelar", callback_data="anime_search_menu", style="primary")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

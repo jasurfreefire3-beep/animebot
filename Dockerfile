@@ -15,3 +15,4 @@ COPY . .
 
 # Botni ishga tushirish
 CMD ["python", "main.py"]
+
