@@ -28,6 +28,23 @@ from utils.tracker import watchers_tracker, get_fast_banner_cover
 user_router = Router()
 db = Database()
 
+# --- Kesh: Telegram rasmlari URL manzillari ---
+_thumb_cache: dict = {}
+
+async def get_telegram_thumb_url(bot, file_id: str):
+    """Inline qidiruvda animening haqiqiy muqova rasmini ko'rsatish uchun URL olish"""
+    if not file_id:
+        return None
+    if file_id in _thumb_cache:
+        return _thumb_cache[file_id]
+    try:
+        f = await bot.get_file(file_id)
+        url = f"https://api.telegram.org/file/bot{bot.token}/{f.file_path}"
+        _thumb_cache[file_id] = url
+        return url
+    except Exception:
+        return None
+
 # --- ⚡ TELEGRAM TEZKOR INLINE QIDIRUV (@Animem_uz_bot <nom>) ---
 @user_router.inline_query()
 async def inline_anime_search(inline_query: InlineQuery):
@@ -71,47 +88,23 @@ async def inline_anime_search(inline_query: InlineQuery):
         if len(desc) > 85:
             desc = desc[:82] + "..."
 
-        media_type = a.get("media_type")
         media_file_id = a.get("media_file_id")
+        thumb_url = await get_telegram_thumb_url(inline_query.bot, media_file_id)
 
-        # Rasmli / Videoli Inline qidiruv natijasi (Telegramda rasm va video muqovasi darhol ko'rinadi)
-        if media_type == "photo" and media_file_id:
-            results.append(
-                InlineQueryResultCachedPhoto(
-                    id=f"anime_{anime_id}",
-                    photo_file_id=media_file_id,
-                    title=f"🎬 {title} ({year})",
-                    description=desc,
-                    caption=card_text,
-                    parse_mode="HTML",
-                    reply_markup=kb
-                )
+        # Inline qidiruvda: Rasm ham, uning ostida / yonida Anime Nomi va ma'lumotlari ham to'liq chiqadi
+        results.append(
+            InlineQueryResultArticle(
+                id=f"anime_{anime_id}",
+                title=f"🎬 {title} ({year})",
+                description=desc,
+                thumbnail_url=thumb_url,
+                input_message_content=InputTextMessageContent(
+                    message_text=card_text,
+                    parse_mode="HTML"
+                ),
+                reply_markup=kb
             )
-        elif media_type == "video" and media_file_id:
-            results.append(
-                InlineQueryResultCachedVideo(
-                    id=f"anime_{anime_id}",
-                    video_file_id=media_file_id,
-                    title=f"🎬 {title} ({year})",
-                    description=desc,
-                    caption=card_text,
-                    parse_mode="HTML",
-                    reply_markup=kb
-                )
-            )
-        else:
-            results.append(
-                InlineQueryResultArticle(
-                    id=f"anime_{anime_id}",
-                    title=f"🎬 {title} ({year})",
-                    description=desc,
-                    input_message_content=InputTextMessageContent(
-                        message_text=card_text,
-                        parse_mode="HTML"
-                    ),
-                    reply_markup=kb
-                )
-            )
+        )
 
     if query and not animes:
         results.append(

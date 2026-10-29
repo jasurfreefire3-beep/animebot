@@ -4,6 +4,13 @@ import sqlite3
 import threading
 from typing import List, Optional, Dict, Any
 
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    HAS_PSYCOPG2 = True
+except ImportError:
+    HAS_PSYCOPG2 = False
+
 class Database:
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
@@ -17,6 +24,7 @@ class Database:
 
         self._lock = threading.Lock()
         self.init_db()
+        self.init_pg()
 
     def get_connection(self):
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -87,6 +95,59 @@ class Database:
             conn.close()
 
         self.export_to_json()
+
+    def get_pg_connection(self):
+        """PostgreSQL ulanishini olish"""
+        if not HAS_PSYCOPG2:
+            return None
+        pg_pwd = os.getenv("PG_PASSWORD", "")
+        if not pg_pwd:
+            return None
+        try:
+            return psycopg2.connect(
+                host=os.getenv("PG_HOST", "psql.fr-roub1.bengt.wasmernet.com"),
+                port=int(os.getenv("PG_PORT", "20184")),
+                dbname=os.getenv("PG_DATABASE", "Animemuzbot"),
+                user=os.getenv("PG_USER", "user_cb15d3b5"),
+                password=pg_pwd,
+                sslmode="require",
+                connect_timeout=4
+            )
+        except Exception:
+            return None
+
+    def init_pg(self):
+        """PostgreSQL ma'lumotlar bazasida JSON jadvallarini ochish"""
+        conn = self.get_pg_connection()
+        if not conn:
+            return
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS animes_json (
+                    id SERIAL PRIMARY KEY,
+                    anime_id INT UNIQUE NOT NULL,
+                    title TEXT NOT NULL,
+                    data JSONB NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
+                """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS bot_sessions (
+                    user_id BIGINT PRIMARY KEY,
+                    last_msg_id BIGINT
+                );
+                """)
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     # --- Sozlamalar metodlari ---
     def get_setting(self, key: str) -> Optional[str]:
@@ -284,7 +345,7 @@ class Database:
             return res if res is not None else 0
 
     def export_to_json(self, json_path: str = "data/animes.json"):
-        """Barcha anime va epizodlar ma'lumotlarini JSON formatda faylga saqlab borish"""
+        """Barcha anime va epizodlar ma'lumotlarini JSON formatda faylga va PostgreSQL bazasiga saqlab borish"""
         try:
             full_path = os.path.join(os.path.dirname(__file__), json_path)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -296,5 +357,24 @@ class Database:
                 data.append(anime_dict)
             with open(full_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+
+            # Agar PostgreSQL ulangan bo'lsa, JSON formatda PostgreSQL ga ham yuklaymiz
+            pg_conn = self.get_pg_connection()
+            if pg_conn:
+                try:
+                    with pg_conn.cursor() as cur:
+                        for item in data:
+                            cur.execute("""
+                            INSERT INTO animes_json (anime_id, title, data, updated_at)
+                            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                            ON CONFLICT (anime_id) DO UPDATE SET
+                                title = EXCLUDED.title,
+                                data = EXCLUDED.data,
+                                updated_at = CURRENT_TIMESTAMP;
+                            """, (item["id"], item["title"], json.dumps(item, ensure_ascii=False)))
+                    pg_conn.commit()
+                    pg_conn.close()
+                except Exception:
+                    pass
         except Exception:
             pass
