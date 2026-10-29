@@ -8,6 +8,8 @@ from aiogram.types import (
     FSInputFile,
     InlineQuery,
     InlineQueryResultArticle,
+    InlineQueryResultCachedPhoto,
+    InlineQueryResultCachedVideo,
     InputTextMessageContent,
     InlineKeyboardMarkup,
     InlineKeyboardButton
@@ -69,27 +71,56 @@ async def inline_anime_search(inline_query: InlineQuery):
         if len(desc) > 85:
             desc = desc[:82] + "..."
 
-        results.append(
-            InlineQueryResultArticle(
-                id=f"anime_{anime_id}",
-                title=f"🎬 {title} ({year})",
-                description=desc,
-                input_message_content=InputTextMessageContent(
-                    message_text=card_text,
-                    parse_mode="HTML"
-                ),
-                reply_markup=kb
+        media_type = a.get("media_type")
+        media_file_id = a.get("media_file_id")
+
+        # Rasmli / Videoli Inline qidiruv natijasi (Telegramda rasm va video muqovasi darhol ko'rinadi)
+        if media_type == "photo" and media_file_id:
+            results.append(
+                InlineQueryResultCachedPhoto(
+                    id=f"anime_{anime_id}",
+                    photo_file_id=media_file_id,
+                    title=f"🎬 {title} ({year})",
+                    description=desc,
+                    caption=card_text,
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
             )
-        )
+        elif media_type == "video" and media_file_id:
+            results.append(
+                InlineQueryResultCachedVideo(
+                    id=f"anime_{anime_id}",
+                    video_file_id=media_file_id,
+                    title=f"🎬 {title} ({year})",
+                    description=desc,
+                    caption=card_text,
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+            )
+        else:
+            results.append(
+                InlineQueryResultArticle(
+                    id=f"anime_{anime_id}",
+                    title=f"🎬 {title} ({year})",
+                    description=desc,
+                    input_message_content=InputTextMessageContent(
+                        message_text=card_text,
+                        parse_mode="HTML"
+                    ),
+                    reply_markup=kb
+                )
+            )
 
     if query and not animes:
         results.append(
             InlineQueryResultArticle(
                 id="no_results",
                 title=f"❌ '{query}' nomli anime topilmadi",
-                description="Boshqa nom bilan qidirib ko'ring yoki barcha animelarni ko'ring",
+                description="Boshqa nom bilan qidirib ko'ring",
                 input_message_content=InputTextMessageContent(
-                    message_text=f"🔍 <b>'{query}'</b> bo'yicha hech qanday anime topilmadi.\n\nBarcha mavjud animelarni ko'rish uchun botga kiring: @{bot_info.username}",
+                    message_text=f"🔍 <b>'{query}'</b> bo'yicha hech qanday anime topilmadi.\n\nAnime qidirish uchun nomini to'g'ri yozing.",
                     parse_mode="HTML"
                 )
             )
