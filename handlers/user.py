@@ -1,7 +1,18 @@
 import os
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InputMediaVideo, InputMediaPhoto, FSInputFile
-from aiogram.filters import CommandStart, CommandObject
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InputMediaVideo,
+    InputMediaPhoto,
+    FSInputFile,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
+)
+from aiogram.filters import CommandStart, CommandObject, Command
 
 from database import Database
 from keyboards import (
@@ -14,6 +25,94 @@ from utils.tracker import watchers_tracker, get_fast_banner_cover
 
 user_router = Router()
 db = Database()
+
+# --- ⚡ TELEGRAM TEZKOR INLINE QIDIRUV (@Animem_uz_bot <nom>) ---
+@user_router.inline_query()
+async def inline_anime_search(inline_query: InlineQuery):
+    query = inline_query.query.strip().lower()
+
+    if not query:
+        animes = db.get_all_animes()[:30]
+    else:
+        animes = db.search_animes(query)[:30]
+
+    bot_info = await inline_query.bot.get_me()
+    results = []
+
+    for a in animes:
+        anime_id = a["id"]
+        ep_count = db.get_episode_count(anime_id)
+        year = a.get("year", 2024)
+        genres = a.get("genres", "")
+        title = a["title"]
+        views = a.get("views", 0)
+
+        ep_str = f"{ep_count} / {ep_count} epizod" if ep_count > 0 else "0 epizod (Tez kunda)"
+        card_text = (
+            f"📕 <b>{title}</b>\n\n"
+            f"<blockquote>{genres} ”</blockquote>\n"
+            f"<blockquote>📺 {ep_str} ”</blockquote>\n"
+            f"<blockquote>📦 {a.get('duration_per_ep', '24 daq.')} • 📅 {year} ”</blockquote>\n"
+            f"<blockquote>👁️ {views} marta ko'rildi ”</blockquote>"
+        )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"▶️ Tomosha qilish ( {ep_count} epizod )" if ep_count > 0 else "▶️ Tomosha qilish (Tez kunda)",
+                    url=f"https://t.me/{bot_info.username}?start=anime_{anime_id}"
+                )
+            ]
+        ])
+
+        desc = f"📅 {year}-yil • 📺 {ep_count} ep • 🏷️ {genres}"
+        if len(desc) > 85:
+            desc = desc[:82] + "..."
+
+        results.append(
+            InlineQueryResultArticle(
+                id=f"anime_{anime_id}",
+                title=f"🎬 {title} ({year})",
+                description=desc,
+                input_message_content=InputTextMessageContent(
+                    message_text=card_text,
+                    parse_mode="HTML"
+                ),
+                reply_markup=kb
+            )
+        )
+
+    if query and not animes:
+        results.append(
+            InlineQueryResultArticle(
+                id="no_results",
+                title=f"❌ '{query}' nomli anime topilmadi",
+                description="Boshqa nom bilan qidirib ko'ring yoki barcha animelarni ko'ring",
+                input_message_content=InputTextMessageContent(
+                    message_text=f"🔍 <b>'{query}'</b> bo'yicha hech qanday anime topilmadi.\n\nBarcha mavjud animelarni ko'rish uchun botga kiring: @{bot_info.username}",
+                    parse_mode="HTML"
+                )
+            )
+        )
+
+    await inline_query.answer(results, cache_time=5, is_personal=True)
+
+# --- /search yoki /qidiruv buyrug'i ---
+@user_router.message(Command("search"))
+@user_router.message(Command("qidiruv"))
+async def search_command_handler(message: Message):
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    kb = get_start_kb()
+    sent_msg = await message.answer(
+        "🔍 <b>Animelarni qidirish:</b>\n\n"
+        "Quyidagi tugma orqali anime nomini yozib qidirishingiz yoki to'liq ro'yxatni ochishingiz mumkin:",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    db.set_user_last_msg(message.from_user.id, sent_msg.message_id)
 
 def format_anime_card_text(anime: dict, ep_count: int) -> str:
     """1-rasmdagi va foydalanuvchi so'ragan ramkali (blockquote) ko'rinish"""

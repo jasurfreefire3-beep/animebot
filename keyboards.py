@@ -39,14 +39,22 @@ def get_finish_episodes_kb() -> ReplyKeyboardMarkup:
 def get_start_kb() -> InlineKeyboardMarkup:
     """
     Start xabari tagidagi yashil rangdagi '🔍 Animelarni qidirish' tugmasi
+    (Telegramning tezkor inline qidiruvini ochadi va ro'yxat ko'rinishini beradi)
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="🔍 Animelarni qidirish",
-                    callback_data="anime_search_menu",
+                    switch_inline_query_current_chat="",
                     style="success"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📋 Barcha animelar ro'yxati",
+                    callback_data="anime_search_menu",
+                    style="primary"
                 )
             ]
         ]
@@ -110,7 +118,7 @@ def get_anime_card_kb(anime_id: int, total_episodes: int) -> InlineKeyboardMarku
     """
     1-rasmdagi ko'rinish:
     Karta tagidagi katta yashil 'Tomosha qilish' tugmasi (style='success')
-    va '🔍 Boshqa animelar' tugmasi
+    va ko'k rangdagi '🔍 Barcha animelar' (Inline qidiruv) tugmasi
     """
     ep_label = f"▶️ Tomosha qilish ( {total_episodes} epizod )" if total_episodes > 0 else "▶️ Tomosha qilish (Tez kunda)"
     buttons = [
@@ -118,7 +126,7 @@ def get_anime_card_kb(anime_id: int, total_episodes: int) -> InlineKeyboardMarku
             InlineKeyboardButton(text=ep_label, callback_data=f"watch_{anime_id}_1", style="success")
         ],
         [
-            InlineKeyboardButton(text="🔍 Boshqa animelar", callback_data="anime_search_menu", style="primary")
+            InlineKeyboardButton(text="🔍 Barcha animelar", switch_inline_query_current_chat="", style="primary")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -181,9 +189,12 @@ def get_episode_grid_kb(anime_id: int, current_ep: int, episode_numbers: list, p
 
     keyboard.append(nav_row)
 
-    # Asosiy kartaga qaytish tugmasi qizil (danger) rangda
+    # Asosiy kartaga qaytish tugmasi qizil (danger) rangda va Barcha animelar ko'k (primary)
     keyboard.append([
         InlineKeyboardButton(text="📕 Anime ma'lumotlariga qaytish", callback_data=f"card_{anime_id}", style="danger")
+    ])
+    keyboard.append([
+        InlineKeyboardButton(text="🔍 Barcha animelar", switch_inline_query_current_chat="", style="primary")
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)

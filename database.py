@@ -1,4 +1,5 @@
 import os
+import json
 import sqlite3
 import threading
 from typing import List, Optional, Dict, Any
@@ -8,7 +9,7 @@ class Database:
         if db_path is None:
             db_path = os.getenv("DATABASE_PATH", "anime_bot.db")
         self.db_path = db_path
-        
+
         # Agar papka ko'rsatilgan bo'lsa (masalan /data/anime_bot.db), uni yaratamiz
         db_dir = os.path.dirname(self.db_path)
         if db_dir:
@@ -85,6 +86,8 @@ class Database:
             conn.commit()
             conn.close()
 
+        self.export_to_json()
+
     # --- Sozlamalar metodlari ---
     def get_setting(self, key: str) -> Optional[str]:
         with self._lock:
@@ -159,7 +162,8 @@ class Database:
             anime_id = cursor.lastrowid
             conn.commit()
             conn.close()
-            return anime_id
+        self.export_to_json()
+        return anime_id
 
     def get_anime(self, anime_id: int) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -182,6 +186,7 @@ class Database:
             cursor.execute(f"UPDATE animes SET {field} = ? WHERE id = ?;", (value, anime_id))
             conn.commit()
             conn.close()
+        self.export_to_json()
 
     def get_all_animes(self) -> List[Dict[str, Any]]:
         with self._lock:
@@ -218,6 +223,7 @@ class Database:
             cursor.execute("DELETE FROM animes WHERE id = ?;", (anime_id,))
             conn.commit()
             conn.close()
+        self.export_to_json()
 
     # --- Epizod metodlari ---
     def add_or_update_episode(self, anime_id: int, episode_number: int, video_file_id: str, caption: str = ""):
@@ -233,6 +239,7 @@ class Database:
             """, (anime_id, episode_number, video_file_id, caption))
             conn.commit()
             conn.close()
+        self.export_to_json()
 
     def get_episodes(self, anime_id: int) -> List[Dict[str, Any]]:
         with self._lock:
@@ -275,3 +282,19 @@ class Database:
             res = cursor.fetchone()[0]
             conn.close()
             return res if res is not None else 0
+
+    def export_to_json(self, json_path: str = "data/animes.json"):
+        """Barcha anime va epizodlar ma'lumotlarini JSON formatda faylga saqlab borish"""
+        try:
+            full_path = os.path.join(os.path.dirname(__file__), json_path)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            animes = self.get_all_animes()
+            data = []
+            for a in animes:
+                anime_dict = dict(a)
+                anime_dict["episodes"] = self.get_episodes(a["id"])
+                data.append(anime_dict)
+            with open(full_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
