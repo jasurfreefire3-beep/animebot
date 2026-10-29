@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables (Xavfsizlik uchun tokenlar gitga kirmaydi)
+.env
+
+# SQLite local database
+*.db
+*.sqlite3
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
