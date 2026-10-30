@@ -91,6 +91,11 @@ async def inline_anime_search(inline_query: InlineQuery):
         media_file_id = a.get("media_file_id")
         thumb_url = await get_telegram_thumb_url(inline_query.bot, media_file_id)
 
+        # Rasm xabar tepasida chiqishi va uning ostida anime nomi va ma'lumotlari turishi uchun
+        msg_text = card_text
+        if thumb_url:
+            msg_text = f'<a href="{thumb_url}">&#8205;</a>' + card_text
+
         # Inline qidiruvda: Rasm ham, uning ostida / yonida Anime Nomi va ma'lumotlari ham to'liq chiqadi
         results.append(
             InlineQueryResultArticle(
@@ -99,7 +104,7 @@ async def inline_anime_search(inline_query: InlineQuery):
                 description=desc,
                 thumbnail_url=thumb_url,
                 input_message_content=InputTextMessageContent(
-                    message_text=card_text,
+                    message_text=msg_text,
                     parse_mode="HTML"
                 ),
                 reply_markup=kb

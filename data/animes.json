@@ -1,1 +1,175 @@
-[]
+[
+  {
+    "id": 1,
+    "title": "Ovchi X Ovchi",
+    "genres": "arguzasht, Komedik, Ekshn, Jangari, Super kuch",
+    "media_type": "photo",
+    "media_file_id": "AgACAgIAAxkBAAMLauNlk_o72T_Y5-dh00IUq1XBxcYAAg8iaxtZ5BhLbKnA8VRW6-YBAAMCAAN5AAM9BA",
+    "year": 2011,
+    "duration_per_ep": "24 daq.",
+    "views": 27,
+    "created_at": "2026-10-30 01:44:40.656094",
+    "episodes": [
+      {
+        "id": 5,
+        "anime_id": 1,
+        "episode_number": 1,
+        "video_file_id": "BAACAgQAAxkBAAMcauNmudr0FKMGz_rCKDWh3HLFawUAAkkZAAKYvTBQm2_3GWRbKpg9BA",
+        "caption": "Ovchi X Ovchi\n\n1-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 9,
+        "anime_id": 1,
+        "episode_number": 2,
+        "video_file_id": "BAACAgIAAxkBAAMdauNmuU7_urRgukA_md-vIRz6ClsAAsYcAALCexFLkgcHj29g2SQ9BA",
+        "caption": "Ovchi X Ovchi\n\n2-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 3,
+        "anime_id": 1,
+        "episode_number": 3,
+        "video_file_id": "BAACAgIAAxkBAAMeauNmucfj0j0GckhSQJEF6Axvad8AAvogAALma-FIpWQhmb_r_kk9BA",
+        "caption": "Ovchi X Ovchi\n\n3-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 10,
+        "anime_id": 1,
+        "episode_number": 4,
+        "video_file_id": "BAACAgIAAxkBAAMfauNmudcriZeS338N5xRf-b0wni4AAswoAAI_hglJMZ-FwooXS0M9BA",
+        "caption": "Ovchi X Ovchi\n\n4-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 8,
+        "anime_id": 1,
+        "episode_number": 5,
+        "video_file_id": "BAACAgIAAxkBAAMgauNmuTuZgXaiH6BHewpxYfw8nWkAAssgAAKZkElJGCriPG98hNc9BA",
+        "caption": "Ovchi X Ovchi\n\n5-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 1,
+        "anime_id": 1,
+        "episode_number": 6,
+        "video_file_id": "BAACAgIAAxkBAAMhauNmuTSflFTyseq6E4QEYSSxtBkAAkYkAAKsRrlLL0et981V-vY9BA",
+        "caption": "Ovchi X Ovchi\n\n6-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 6,
+        "anime_id": 1,
+        "episode_number": 7,
+        "video_file_id": "BAACAgIAAxkBAAMiauNmue6hBEki8MHGw822wkZtMLEAAq8qAAKZ4AlIoiRrXCa50lY9BA",
+        "caption": "Ovchi X Ovchi\n\n7-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 7,
+        "anime_id": 1,
+        "episode_number": 8,
+        "video_file_id": "BAACAgIAAxkBAAMjauNmuaI6XmFYZxbWdEKbcxS_pkgAAn0tAAKyp0BIj5lxGKuX_zg9BA",
+        "caption": "Ovchi X Ovchi\n\n8-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 2,
+        "anime_id": 1,
+        "episode_number": 9,
+        "video_file_id": "BAACAgIAAxkBAAMkauNmuVmeeXXTSIxDTIblsJOq1kYAAuYrAAK4mYhI6hSjlMZluec9BA",
+        "caption": "Ovchi X Ovchi\n\n9-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 4,
+        "anime_id": 1,
+        "episode_number": 10,
+        "video_file_id": "BAACAgIAAxkBAAMlauNmuTxTdZBJIaf8aD-mcdIdE34AAvgrAAKQReBItKyHVmKu8QY9BA",
+        "caption": "Ovchi X Ovchi\n\n10-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 20,
+        "anime_id": 1,
+        "episode_number": 11,
+        "video_file_id": "BAACAgIAAxkBAAM_auNn8Le8M9TMqg5_ZzLQvjHn5wMAAhwwAAJzIxFJsDO4HJGs7409BA",
+        "caption": "Ovchi X Ovchi\n\n11-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 17,
+        "anime_id": 1,
+        "episode_number": 12,
+        "video_file_id": "BAACAgIAAxkBAANAauNn8AABUjlCIDTSuTh2rMzCNPrZAAJrKwAC2sNRSZtnN_YoHEn7PQQ",
+        "caption": "Ovchi X Ovchi\n\n12-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 14,
+        "anime_id": 1,
+        "episode_number": 13,
+        "video_file_id": "BAACAgIAAxkBAANBauNn8MKp46FLjfO9eNd_cC9SP4MAAkMuAAKLf_lJlZ5SSavbAuI9BA",
+        "caption": "Ovchi X Ovchi\n\n13-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 15,
+        "anime_id": 1,
+        "episode_number": 14,
+        "video_file_id": "BAACAgIAAxkBAANCauNn8CzH037Mc7QdoMygeclvqDkAAiwxAAKK4jBJlhrpjdGLjlc9BA",
+        "caption": "Ovchi X Ovchi\n\n14-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 12,
+        "anime_id": 1,
+        "episode_number": 15,
+        "video_file_id": "BAACAgIAAxkBAANDauNn8HUHhEq9l652ZPyIIpJyBtoAAggxAAKnlvFJuErwwrbhIE09BA",
+        "caption": "Ovchi X Ovchi\n\n15-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 11,
+        "anime_id": 1,
+        "episode_number": 16,
+        "video_file_id": "BAACAgIAAxkBAANEauNn8PfWkj60vt_VCOb019_bSUwAAjUyAAKFdxlKTjJ3euctBhg9BA",
+        "caption": "Ovchi X Ovchi\n\n16-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 16,
+        "anime_id": 1,
+        "episode_number": 17,
+        "video_file_id": "BAACAgIAAxkBAANFauNn8DF8ocki1U-rIJzw8adFyBEAAk03AAK5mlhKkIEkVBBf15I9BA",
+        "caption": "Ovchi X Ovchi\n\n17-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 18,
+        "anime_id": 1,
+        "episode_number": 18,
+        "video_file_id": "BAACAgIAAxkBAANGauNn8EWzmpS_nmkCdrMkIuTEHMAAAlI3AAK5mlhK7md1th53tJU9BA",
+        "caption": "Ovchi X Ovchi\n\n18-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 19,
+        "anime_id": 1,
+        "episode_number": 19,
+        "video_file_id": "BAACAgIAAxkBAANHauNn8FFrBxaX19Fty3lBGgkRb2EAAto8AAK5mlhKNGBob7ifD7c9BA",
+        "caption": "Ovchi X Ovchi\n\n19-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      },
+      {
+        "id": 13,
+        "anime_id": 1,
+        "episode_number": 20,
+        "video_file_id": "BAACAgIAAxkBAANIauNn8FqshRt0me9xwlv5wevHQwIAAi0uAAIhrmlKRrj007o8pM09BA",
+        "caption": "Ovchi X Ovchi\n\n20-qism",
+        "created_at": "2026-10-30 01:44:40.656094"
+      }
+    ]
+  }
+]
