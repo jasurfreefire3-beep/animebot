@@ -2,6 +2,8 @@ import os
 import json
 import sqlite3
 import threading
+import queue
+import time
 from typing import List, Optional, Dict, Any
 from dotenv import load_dotenv
 
@@ -16,7 +18,20 @@ except ImportError:
 
 
 class Database:
+    _instance = None
+    _init_lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        with cls._init_lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
+
     def __init__(self, db_path: Optional[str] = None):
+        if getattr(self, "_initialized", False):
+            return
+
         if db_path is None:
             default_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "anime_bot.db")
             db_path = os.getenv("DATABASE_PATH", default_path)
@@ -26,151 +41,243 @@ class Database:
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
 
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+
+        # --- Tezkor RAM keshlar (0.0001 soniyada javob berish uchun) ---
+        self._animes_cache: Dict[int, Dict[str, Any]] = {}
+        self._episodes_cache: Dict[int, List[Dict[str, Any]]] = {}
+        self._user_sessions_cache: Dict[int, int] = {}
+        self._settings_cache: Dict[str, str] = {}
+        self._users_count_cache: int = 0
+
+        # --- Asinxron PostgreSQL fon navbati ---
+        self._pg_queue = queue.Queue()
+        self._pg_conn = None
+
+        # Bazalarni ishga tushirish
         self.init_sqlite()
-        self.init_pg()
+        self._load_cache_from_sqlite()
+
+        # PostgreSQL fon xizmatchisini ishga tushirish
+        self._bg_thread = threading.Thread(target=self._pg_worker, daemon=True, name="PGWorker")
+        self._bg_thread.start()
+
+        # Dastlabki sinxronlashni navbatga qo'yish
+        self._pg_queue.put(("init_pg", ()))
+
+        self._initialized = True
 
     # ==========================================
-    # PostgreSQL Connection & Init
+    # PostgreSQL Connection & Worker Thread
     # ==========================================
-    def get_pg_connection(self):
-        """PostgreSQL ulanishini olish"""
+    def _get_pg_conn(self):
+        """Doimiy PostgreSQL ulanishini saqlash va uzilsa qayta ulash"""
         if not HAS_PSYCOPG2:
             return None
         pg_pwd = os.getenv("PG_PASSWORD", "")
         if not pg_pwd:
             return None
+
+        if self._pg_conn is not None:
+            try:
+                # Ulanish tirikligini tekshiramiz
+                with self._pg_conn.cursor() as cur:
+                    cur.execute("SELECT 1;")
+                return self._pg_conn
+            except Exception:
+                try:
+                    self._pg_conn.close()
+                except Exception:
+                    pass
+                self._pg_conn = None
+
         try:
-            return psycopg2.connect(
+            self._pg_conn = psycopg2.connect(
                 host=os.getenv("PG_HOST", "psql.fr-roub1.bengt.wasmernet.com"),
                 port=int(os.getenv("PG_PORT", "20184")),
                 dbname=os.getenv("PG_DATABASE", "Animemuzbot"),
                 user=os.getenv("PG_USER", "user_cb15d3b5"),
                 password=pg_pwd,
                 sslmode="require",
-                connect_timeout=5
+                connect_timeout=6
             )
-        except Exception:
+            self._pg_conn.autocommit = True
+            return self._pg_conn
+        except Exception as e:
             return None
 
-    def init_pg(self):
-        """PostgreSQL ma'lumotlar bazasida barcha jadvallarni ochish va sinxronlash"""
-        conn = self.get_pg_connection()
-        if not conn:
-            return
-        try:
-            with conn.cursor() as cur:
-                # 1. Animelar jadvali
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS animes (
-                    id SERIAL PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    genres TEXT NOT NULL,
-                    media_type TEXT NOT NULL DEFAULT 'photo',
-                    media_file_id TEXT NOT NULL,
-                    year INT DEFAULT 2024,
-                    duration_per_ep TEXT DEFAULT '24 daq.',
-                    views INT DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """)
+    def _pg_worker(self):
+        """PostgreSQL ga ma'lumotlarni fonda kechikishsiz yozuvchi xizmatchi"""
+        while True:
+            try:
+                action, args = self._pg_queue.get()
+                conn = self._get_pg_conn()
+                if not conn:
+                    time.sleep(2)
+                    self._pg_queue.put((action, args))
+                    self._pg_queue.task_done()
+                    continue
 
-                # 2. Epizodlar jadvali
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS episodes (
-                    id SERIAL PRIMARY KEY,
-                    anime_id INT NOT NULL REFERENCES animes(id) ON DELETE CASCADE,
-                    episode_number INT NOT NULL,
-                    video_file_id TEXT NOT NULL,
-                    caption TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(anime_id, episode_number)
-                );
-                """)
-
-                # 3. Foydalanuvchilar jadvali
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """)
-
-                # 4. Tizim sozlamalari
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                );
-                """)
-
-                # 5. Foydalanuvchi sessiyalari
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS user_sessions (
-                    user_id BIGINT PRIMARY KEY,
-                    last_msg_id BIGINT
-                );
-                """)
-
-                # 6. JSON formatdagi to'liq animelar jadvali
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS animes_json (
-                    id SERIAL PRIMARY KEY,
-                    anime_id INT UNIQUE NOT NULL,
-                    title TEXT NOT NULL,
-                    data JSONB NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """)
-
-            conn.commit()
-
-            # Agar PostgreSQL yangi yoki bo'sh bo'lsa, mavjud ma'lumotlarni SQLite / animes.json dan yuklaymiz
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM animes;")
-                pg_count = cur.fetchone()[0]
-
-            if pg_count == 0:
-                sq_animes = self._sqlite_get_all_animes()
-                if sq_animes:
-                    with conn.cursor() as cur:
-                        for a in sq_animes:
+                with conn.cursor() as cur:
+                    if action == "init_pg":
+                        self._do_init_pg(cur)
+                    elif action == "sync_anime":
+                        anime_id, title, genres, media_type, media_file_id, year, duration, views = args
+                        cur.execute("""
+                        INSERT INTO animes (id, title, genres, media_type, media_file_id, year, duration_per_ep, views)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (id) DO UPDATE SET
+                            title = EXCLUDED.title,
+                            genres = EXCLUDED.genres,
+                            media_type = EXCLUDED.media_type,
+                            media_file_id = EXCLUDED.media_file_id,
+                            year = EXCLUDED.year,
+                            duration_per_ep = EXCLUDED.duration_per_ep,
+                            views = EXCLUDED.views;
+                        """, (anime_id, title, genres, media_type, media_file_id, year, duration, views))
+                        cur.execute("SELECT setval('animes_id_seq', (SELECT COALESCE(MAX(id), 1) FROM animes));")
+                    elif action == "sync_views":
+                        anime_id = args[0]
+                        cur.execute("UPDATE animes SET views = views + 1 WHERE id = %s;", (anime_id,))
+                    elif action == "sync_field":
+                        anime_id, field, value = args
+                        cur.execute(f"UPDATE animes SET {field} = %s WHERE id = %s;", (value, anime_id))
+                    elif action == "delete_anime":
+                        anime_id = args[0]
+                        cur.execute("DELETE FROM episodes WHERE anime_id = %s;", (anime_id,))
+                        cur.execute("DELETE FROM animes WHERE id = %s;", (anime_id,))
+                        cur.execute("DELETE FROM animes_json WHERE anime_id = %s;", (anime_id,))
+                    elif action == "sync_episode":
+                        anime_id, ep_num, video_id, caption = args
+                        cur.execute("""
+                        INSERT INTO episodes (anime_id, episode_number, video_file_id, caption)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT(anime_id, episode_number) DO UPDATE SET
+                            video_file_id = EXCLUDED.video_file_id,
+                            caption = EXCLUDED.caption;
+                        """, (anime_id, ep_num, video_id, caption))
+                        cur.execute("SELECT setval('episodes_id_seq', (SELECT COALESCE(MAX(id), 1) FROM episodes));")
+                    elif action == "sync_user":
+                        uid, uname, fname = args
+                        cur.execute("""
+                        INSERT INTO users (user_id, username, first_name)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (user_id) DO UPDATE SET
+                            username = EXCLUDED.username,
+                            first_name = EXCLUDED.first_name;
+                        """, (uid, uname, fname))
+                    elif action == "sync_session":
+                        uid, msg_id = args
+                        cur.execute("""
+                        INSERT INTO user_sessions (user_id, last_msg_id) VALUES (%s, %s)
+                        ON CONFLICT (user_id) DO UPDATE SET last_msg_id = EXCLUDED.last_msg_id;
+                        """, (uid, msg_id))
+                    elif action == "sync_setting":
+                        key, val = args
+                        cur.execute("""
+                        INSERT INTO settings (key, value) VALUES (%s, %s)
+                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+                        """, (key, val))
+                    elif action == "export_json":
+                        data_list = args[0]
+                        for item in data_list:
                             cur.execute("""
-                            INSERT INTO animes (id, title, genres, media_type, media_file_id, year, duration_per_ep, views)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (id) DO UPDATE SET
+                            INSERT INTO animes_json (anime_id, title, data, updated_at)
+                            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                            ON CONFLICT (anime_id) DO UPDATE SET
                                 title = EXCLUDED.title,
-                                genres = EXCLUDED.genres,
-                                media_type = EXCLUDED.media_type,
-                                media_file_id = EXCLUDED.media_file_id,
-                                year = EXCLUDED.year,
-                                duration_per_ep = EXCLUDED.duration_per_ep,
-                                views = EXCLUDED.views;
-                            """, (a["id"], a["title"], a["genres"], a.get("media_type", "photo"), a["media_file_id"], a.get("year", 2024), a.get("duration_per_ep", "24 daq."), a.get("views", 0)))
-                            cur.execute("SELECT setval('animes_id_seq', (SELECT COALESCE(MAX(id), 1) FROM animes));")
+                                data = EXCLUDED.data,
+                                updated_at = CURRENT_TIMESTAMP;
+                            """, (item["id"], item["title"], json.dumps(item, ensure_ascii=False)))
 
-                            for ep in self._sqlite_get_episodes(a["id"]):
-                                cur.execute("""
-                                INSERT INTO episodes (anime_id, episode_number, video_file_id, caption)
-                                VALUES (%s, %s, %s, %s)
-                                ON CONFLICT (anime_id, episode_number) DO UPDATE SET
-                                    video_file_id = EXCLUDED.video_file_id,
-                                    caption = EXCLUDED.caption;
-                                """, (a["id"], ep["episode_number"], ep["video_file_id"], ep.get("caption", "")))
-                            cur.execute("SELECT setval('episodes_id_seq', (SELECT COALESCE(MAX(id), 1) FROM episodes));")
-                    conn.commit()
+                self._pg_queue.task_done()
+            except Exception as e:
+                try:
+                    self._pg_queue.task_done()
+                except Exception:
+                    pass
+                time.sleep(0.5)
 
-            conn.close()
-            print("✅ PostgreSQL ma'lumotlar bazasiga muvaffaqiyatli ulandi va barcha jadvallar faollashtirildi!")
-            self.export_to_json()
-        except Exception as e:
-            print(f"⚠️ PostgreSQL init xatosi: {e}")
+    def _do_init_pg(self, cur):
+        """PostgreSQL jadvallarini tekshirish va SQLite bilan birlashtirish"""
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS animes (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            genres TEXT NOT NULL,
+            media_type TEXT NOT NULL DEFAULT 'photo',
+            media_file_id TEXT NOT NULL,
+            year INT DEFAULT 2024,
+            duration_per_ep TEXT DEFAULT '24 daq.',
+            views INT DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS episodes (
+            id SERIAL PRIMARY KEY,
+            anime_id INT NOT NULL REFERENCES animes(id) ON DELETE CASCADE,
+            episode_number INT NOT NULL,
+            video_file_id TEXT NOT NULL,
+            caption TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(anime_id, episode_number)
+        );
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            user_id BIGINT PRIMARY KEY,
+            last_msg_id BIGINT
+        );
+        CREATE TABLE IF NOT EXISTS animes_json (
+            id SERIAL PRIMARY KEY,
+            anime_id INT UNIQUE NOT NULL,
+            title TEXT NOT NULL,
+            data JSONB NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        # Agar PostgreSQL da animelar bo'lsa, ularni keshmizga yuklaymiz
+        cur.execute("SELECT * FROM animes ORDER BY id DESC;")
+        colnames = [desc[0] for desc in cur.description]
+        pg_animes = [dict(zip(colnames, row)) for row in cur.fetchall()]
+
+        if pg_animes:
+            with self._lock:
+                for a in pg_animes:
+                    aid = a["id"]
+                    self._animes_cache[aid] = a
+                    cur.execute("SELECT * FROM episodes WHERE anime_id = %s ORDER BY episode_number ASC;", (aid,))
+                    ep_cols = [desc[0] for desc in cur.description]
+                    self._episodes_cache[aid] = [dict(zip(ep_cols, row)) for row in cur.fetchall()]
+        else:
+            # Agar PostgreSQL bo'sh bo'lsa, SQLite keshi orqali PostgreSQL ga yuklaymiz
+            with self._lock:
+                for a in self._animes_cache.values():
+                    aid = a["id"]
+                    cur.execute("""
+                    INSERT INTO animes (id, title, genres, media_type, media_file_id, year, duration_per_ep, views)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING;
+                    """, (aid, a["title"], a["genres"], a.get("media_type", "photo"), a["media_file_id"], a.get("year", 2024), a.get("duration_per_ep", "24 daq."), a.get("views", 0)))
+                    for ep in self._episodes_cache.get(aid, []):
+                        cur.execute("""
+                        INSERT INTO episodes (anime_id, episode_number, video_file_id, caption)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (anime_id, episode_number) DO NOTHING;
+                        """, (aid, ep["episode_number"], ep["video_file_id"], ep.get("caption", "")))
+            cur.execute("SELECT setval('animes_id_seq', (SELECT COALESCE(MAX(id), 1) FROM animes));")
+            cur.execute("SELECT setval('episodes_id_seq', (SELECT COALESCE(MAX(id), 1) FROM episodes));")
 
     # ==========================================
-    # SQLite Backup Connection & Init
+    # SQLite Backup Connection & Cache Loading
     # ==========================================
     def get_sqlite_conn(self):
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -229,44 +336,79 @@ class Database:
             conn.commit()
             conn.close()
 
-    # ==========================================
-    # Settings Metodlari
-    # ==========================================
-    def get_setting(self, key: str) -> Optional[str]:
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("SELECT value FROM settings WHERE key = %s;", (key,))
-                    row = cur.fetchone()
-                    pg_conn.close()
-                    if row:
-                        return row[0]
-            except Exception:
-                pass
-
+    def _load_cache_from_sqlite(self):
+        """Ishga tushganda SQLite dan barcha ma'lumotlarni RAM ga yuklab olish (0ms kechikish uchun)"""
         with self._lock:
             conn = self.get_sqlite_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT value FROM settings WHERE key = ?;", (key,))
-            row = cursor.fetchone()
+
+            # Animelar
+            cursor.execute("SELECT * FROM animes ORDER BY id DESC;")
+            rows = cursor.fetchall()
+            for r in rows:
+                d = dict(r)
+                self._animes_cache[d["id"]] = d
+
+            # Epizodlar
+            cursor.execute("SELECT * FROM episodes ORDER BY episode_number ASC;")
+            ep_rows = cursor.fetchall()
+            for ep in ep_rows:
+                ep_dict = dict(ep)
+                aid = ep_dict["anime_id"]
+                if aid not in self._episodes_cache:
+                    self._episodes_cache[aid] = []
+                self._episodes_cache[aid].append(ep_dict)
+
+            # User sessions
+            cursor.execute("SELECT * FROM user_sessions;")
+            for s in cursor.fetchall():
+                self._user_sessions_cache[s["user_id"]] = s["last_msg_id"]
+
+            # Settings
+            cursor.execute("SELECT * FROM settings;")
+            for st in cursor.fetchall():
+                self._settings_cache[st["key"]] = st["value"]
+
+            # Users count
+            cursor.execute("SELECT COUNT(*) FROM users;")
+            self._users_count_cache = cursor.fetchone()[0]
+
             conn.close()
-            return row[0] if row else None
+
+        # Agar baza yangi bo'lsa va animes.json bo'lsa, import qilamiz
+        if not self._animes_cache:
+            json_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "animes.json")
+            if os.path.exists(json_file):
+                try:
+                    with open(json_file, "r", encoding="utf-8") as f:
+                        saved = json.load(f)
+                    for item in saved:
+                        aid = self.add_anime(
+                            title=item["title"],
+                            genres=item["genres"],
+                            media_type=item.get("media_type", "photo"),
+                            media_file_id=item["media_file_id"],
+                            year=item.get("year", 2024),
+                            duration=item.get("duration_per_ep", "24 daq.")
+                        )
+                        for ep in item.get("episodes", []):
+                            self.add_or_update_episode(
+                                anime_id=aid,
+                                episode_number=ep["episode_number"],
+                                video_file_id=ep["video_file_id"],
+                                caption=ep.get("caption", "")
+                            )
+                except Exception:
+                    pass
+
+    # ==========================================
+    # Settings Metodlari (0ms RAM javob)
+    # ==========================================
+    def get_setting(self, key: str) -> Optional[str]:
+        return self._settings_cache.get(key)
 
     def set_setting(self, key: str, value: str):
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("""
-                    INSERT INTO settings (key, value) VALUES (%s, %s)
-                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
-                    """, (key, value))
-                pg_conn.commit()
-                pg_conn.close()
-            except Exception:
-                pass
-
+        self._settings_cache[key] = value
         with self._lock:
             conn = self.get_sqlite_conn()
             cursor = conn.cursor()
@@ -276,27 +418,12 @@ class Database:
             """, (key, value))
             conn.commit()
             conn.close()
+        self._pg_queue.put(("sync_setting", (key, value)))
 
     # ==========================================
-    # Users Metodlari
+    # Users Metodlari (0ms RAM javob)
     # ==========================================
     def register_user(self, user_id: int, username: Optional[str], first_name: Optional[str]):
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("""
-                    INSERT INTO users (user_id, username, first_name)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (user_id) DO UPDATE SET
-                        username = EXCLUDED.username,
-                        first_name = EXCLUDED.first_name;
-                    """, (user_id, username, first_name))
-                pg_conn.commit()
-                pg_conn.close()
-            except Exception:
-                pass
-
         with self._lock:
             conn = self.get_sqlite_conn()
             cursor = conn.cursor()
@@ -304,67 +431,23 @@ class Database:
             INSERT OR IGNORE INTO users (user_id, username, first_name)
             VALUES (?, ?, ?);
             """, (user_id, username, first_name))
+            if cursor.rowcount > 0:
+                self._users_count_cache += 1
             conn.commit()
             conn.close()
+        self._pg_queue.put(("sync_user", (user_id, username, first_name)))
 
     def get_users_count(self) -> int:
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) FROM users;")
-                    cnt = cur.fetchone()[0]
-                    pg_conn.close()
-                    return cnt
-            except Exception:
-                pass
-
-        with self._lock:
-            conn = self.get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM users;")
-            cnt = cursor.fetchone()[0]
-            conn.close()
-            return cnt
+        return self._users_count_cache
 
     # ==========================================
-    # User Sessions Metodlari
+    # User Sessions Metodlari (0ms RAM javob)
     # ==========================================
     def get_user_last_msg(self, user_id: int) -> Optional[int]:
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("SELECT last_msg_id FROM user_sessions WHERE user_id = %s;", (user_id,))
-                    row = cur.fetchone()
-                    pg_conn.close()
-                    if row:
-                        return row[0]
-            except Exception:
-                pass
-
-        with self._lock:
-            conn = self.get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT last_msg_id FROM user_sessions WHERE user_id = ?;", (user_id,))
-            row = cursor.fetchone()
-            conn.close()
-            return row[0] if row else None
+        return self._user_sessions_cache.get(user_id)
 
     def set_user_last_msg(self, user_id: int, message_id: int):
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("""
-                    INSERT INTO user_sessions (user_id, last_msg_id) VALUES (%s, %s)
-                    ON CONFLICT (user_id) DO UPDATE SET last_msg_id = EXCLUDED.last_msg_id;
-                    """, (user_id, message_id))
-                pg_conn.commit()
-                pg_conn.close()
-            except Exception:
-                pass
-
+        self._user_sessions_cache[user_id] = message_id
         with self._lock:
             conn = self.get_sqlite_conn()
             cursor = conn.cursor()
@@ -374,174 +457,95 @@ class Database:
             """, (user_id, message_id))
             conn.commit()
             conn.close()
+        self._pg_queue.put(("sync_session", (user_id, message_id)))
 
     # ==========================================
-    # Anime Metodlari
+    # Anime Metodlari (0ms RAM javob)
     # ==========================================
     def add_anime(self, title: str, genres: str, media_type: str, media_file_id: str, year: int = 2024, duration: str = "24 daq.") -> int:
-        anime_id = None
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("""
-                    INSERT INTO animes (title, genres, media_type, media_file_id, year, duration_per_ep)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    RETURNING id;
-                    """, (title, genres, media_type, media_file_id, year, duration))
-                    anime_id = cur.fetchone()[0]
-                pg_conn.commit()
-                pg_conn.close()
-            except Exception:
-                pass
-
         with self._lock:
             conn = self.get_sqlite_conn()
             cursor = conn.cursor()
-            if anime_id:
-                cursor.execute("""
-                INSERT OR REPLACE INTO animes (id, title, genres, media_type, media_file_id, year, duration_per_ep)
-                VALUES (?, ?, ?, ?, ?, ?, ?);
-                """, (anime_id, title, genres, media_type, media_file_id, year, duration))
-            else:
-                cursor.execute("""
-                INSERT INTO animes (title, genres, media_type, media_file_id, year, duration_per_ep)
-                VALUES (?, ?, ?, ?, ?, ?);
-                """, (title, genres, media_type, media_file_id, year, duration))
-                anime_id = cursor.lastrowid
+            cursor.execute("""
+            INSERT INTO animes (title, genres, media_type, media_file_id, year, duration_per_ep)
+            VALUES (?, ?, ?, ?, ?, ?);
+            """, (title, genres, media_type, media_file_id, year, duration))
+            anime_id = cursor.lastrowid
             conn.commit()
             conn.close()
 
+            # RAM keshni darhol yangilash
+            new_anime = {
+                "id": anime_id,
+                "title": title,
+                "genres": genres,
+                "media_type": media_type,
+                "media_file_id": media_file_id,
+                "year": year,
+                "duration_per_ep": duration,
+                "views": 0
+            }
+            self._animes_cache[anime_id] = new_anime
+            self._episodes_cache[anime_id] = []
+
+        self._pg_queue.put(("sync_anime", (anime_id, title, genres, media_type, media_file_id, year, duration, 0)))
         self.export_to_json()
         return anime_id
 
     def get_anime(self, anime_id: int) -> Optional[Dict[str, Any]]:
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("SELECT * FROM animes WHERE id = %s;", (anime_id,))
-                    row = cur.fetchone()
-                    pg_conn.close()
-                    if row:
-                        return dict(row)
-            except Exception:
-                pass
-
-        with self._lock:
-            conn = self.get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM animes WHERE id = ?;", (anime_id,))
-            row = cursor.fetchone()
-            conn.close()
-            if row:
-                return dict(row)
-            return None
+        """RAM keshdan 0.0001 soniyada animeni olish"""
+        return self._animes_cache.get(anime_id)
 
     def update_anime_field(self, anime_id: int, field: str, value: Any):
         allowed_fields = {"title", "genres", "year", "duration_per_ep", "media_type", "media_file_id"}
         if field not in allowed_fields:
             return
 
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute(f"UPDATE animes SET {field} = %s WHERE id = %s;", (value, anime_id))
-                pg_conn.commit()
-                pg_conn.close()
-            except Exception:
-                pass
-
         with self._lock:
+            if anime_id in self._animes_cache:
+                self._animes_cache[anime_id][field] = value
+
             conn = self.get_sqlite_conn()
             cursor = conn.cursor()
             cursor.execute(f"UPDATE animes SET {field} = ? WHERE id = ?;", (value, anime_id))
             conn.commit()
             conn.close()
 
+        self._pg_queue.put(("sync_field", (anime_id, field, value)))
         self.export_to_json()
 
     def get_all_animes(self) -> List[Dict[str, Any]]:
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("SELECT * FROM animes ORDER BY id DESC;")
-                    rows = cur.fetchall()
-                    pg_conn.close()
-                    return [dict(r) for r in rows]
-            except Exception:
-                pass
-
-        return self._sqlite_get_all_animes()
-
-    def _sqlite_get_all_animes(self) -> List[Dict[str, Any]]:
-        with self._lock:
-            conn = self.get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM animes ORDER BY id DESC;")
-            rows = cursor.fetchall()
-            conn.close()
-            return [dict(r) for r in rows]
+        """Barcha animelarni RAM keshdan 0.0001 soniyada olish"""
+        return sorted(list(self._animes_cache.values()), key=lambda x: x["id"], reverse=True)
 
     def search_animes(self, query: str) -> List[Dict[str, Any]]:
-        pattern = f"%{query.strip()}%"
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("""
-                    SELECT * FROM animes
-                    WHERE title ILIKE %s OR genres ILIKE %s
-                    ORDER BY id DESC;
-                    """, (pattern, pattern))
-                    rows = cur.fetchall()
-                    pg_conn.close()
-                    return [dict(r) for r in rows]
-            except Exception:
-                pass
-
-        with self._lock:
-            conn = self.get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM animes WHERE title LIKE ? OR genres LIKE ? ORDER BY id DESC;", (pattern, pattern))
-            rows = cursor.fetchall()
-            conn.close()
-            return [dict(r) for r in rows]
+        """Tezkor RAM qidiruv (har qanday so'rov bo'yicha 0ms)"""
+        q = query.strip().lower()
+        results = []
+        for a in self._animes_cache.values():
+            if q in a["title"].lower() or q in a.get("genres", "").lower():
+                results.append(a)
+        return sorted(results, key=lambda x: x["id"], reverse=True)
 
     def increment_views(self, anime_id: int):
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("UPDATE animes SET views = views + 1 WHERE id = %s;", (anime_id,))
-                pg_conn.commit()
-                pg_conn.close()
-            except Exception:
-                pass
-
+        """Ko'rishlar sonini RAM va bazada zudlik bilan oshirish"""
         with self._lock:
+            if anime_id in self._animes_cache:
+                self._animes_cache[anime_id]["views"] = self._animes_cache[anime_id].get("views", 0) + 1
+
             conn = self.get_sqlite_conn()
             cursor = conn.cursor()
             cursor.execute("UPDATE animes SET views = views + 1 WHERE id = ?;", (anime_id,))
             conn.commit()
             conn.close()
 
-    def delete_anime(self, anime_id: int):
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("DELETE FROM episodes WHERE anime_id = %s;", (anime_id,))
-                    cur.execute("DELETE FROM animes WHERE id = %s;", (anime_id,))
-                    cur.execute("DELETE FROM animes_json WHERE anime_id = %s;", (anime_id,))
-                pg_conn.commit()
-                pg_conn.close()
-            except Exception:
-                pass
+        self._pg_queue.put(("sync_views", (anime_id,)))
 
+    def delete_anime(self, anime_id: int):
         with self._lock:
+            self._animes_cache.pop(anime_id, None)
+            self._episodes_cache.pop(anime_id, None)
+
             conn = self.get_sqlite_conn()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM episodes WHERE anime_id = ?;", (anime_id,))
@@ -549,29 +553,34 @@ class Database:
             conn.commit()
             conn.close()
 
+        self._pg_queue.put(("delete_anime", (anime_id,)))
         self.export_to_json()
 
     # ==========================================
-    # Epizod Metodlari
+    # Epizod Metodlari (0ms RAM javob)
     # ==========================================
     def add_or_update_episode(self, anime_id: int, episode_number: int, video_file_id: str, caption: str = ""):
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("""
-                    INSERT INTO episodes (anime_id, episode_number, video_file_id, caption)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT(anime_id, episode_number) DO UPDATE SET
-                        video_file_id = EXCLUDED.video_file_id,
-                        caption = EXCLUDED.caption;
-                    """, (anime_id, episode_number, video_file_id, caption))
-                pg_conn.commit()
-                pg_conn.close()
-            except Exception:
-                pass
-
         with self._lock:
+            # RAM keshni yangilash
+            if anime_id not in self._episodes_cache:
+                self._episodes_cache[anime_id] = []
+
+            existing = False
+            for ep in self._episodes_cache[anime_id]:
+                if ep["episode_number"] == episode_number:
+                    ep["video_file_id"] = video_file_id
+                    ep["caption"] = caption
+                    existing = True
+                    break
+            if not existing:
+                self._episodes_cache[anime_id].append({
+                    "anime_id": anime_id,
+                    "episode_number": episode_number,
+                    "video_file_id": video_file_id,
+                    "caption": caption
+                })
+                self._episodes_cache[anime_id].sort(key=lambda x: x["episode_number"])
+
             conn = self.get_sqlite_conn()
             cursor = conn.cursor()
             cursor.execute("""
@@ -584,99 +593,33 @@ class Database:
             conn.commit()
             conn.close()
 
+        self._pg_queue.put(("sync_episode", (anime_id, episode_number, video_file_id, caption)))
         self.export_to_json()
 
     def get_episodes(self, anime_id: int) -> List[Dict[str, Any]]:
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("SELECT * FROM episodes WHERE anime_id = %s ORDER BY episode_number ASC;", (anime_id,))
-                    rows = cur.fetchall()
-                    pg_conn.close()
-                    return [dict(r) for r in rows]
-            except Exception:
-                pass
-
-        return self._sqlite_get_episodes(anime_id)
-
-    def _sqlite_get_episodes(self, anime_id: int) -> List[Dict[str, Any]]:
-        with self._lock:
-            conn = self.get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM episodes WHERE anime_id = ? ORDER BY episode_number ASC;", (anime_id,))
-            rows = cursor.fetchall()
-            conn.close()
-            return [dict(r) for r in rows]
+        """Epizodlar ro'yxatini RAM keshdan darhol olish"""
+        return self._episodes_cache.get(anime_id, [])
 
     def get_episode(self, anime_id: int, episode_number: int) -> Optional[Dict[str, Any]]:
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("SELECT * FROM episodes WHERE anime_id = %s AND episode_number = %s;", (anime_id, episode_number))
-                    row = cur.fetchone()
-                    pg_conn.close()
-                    if row:
-                        return dict(row)
-            except Exception:
-                pass
-
-        with self._lock:
-            conn = self.get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM episodes WHERE anime_id = ? AND episode_number = ?;", (anime_id, episode_number))
-            row = cursor.fetchone()
-            conn.close()
-            if row:
-                return dict(row)
-            return None
+        """Muayyan epizodni RAM keshdan darhol olish"""
+        for ep in self._episodes_cache.get(anime_id, []):
+            if ep["episode_number"] == episode_number:
+                return ep
+        return None
 
     def get_episode_count(self, anime_id: int) -> int:
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) FROM episodes WHERE anime_id = %s;", (anime_id,))
-                    cnt = cur.fetchone()[0]
-                    pg_conn.close()
-                    return cnt
-            except Exception:
-                pass
-
-        with self._lock:
-            conn = self.get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM episodes WHERE anime_id = ?;", (anime_id,))
-            cnt = cursor.fetchone()[0]
-            conn.close()
-            return cnt
+        """Qismlar sonini RAM keshdan darhol olish"""
+        return len(self._episodes_cache.get(anime_id, []))
 
     def get_max_episode_number(self, anime_id: int) -> int:
-        pg_conn = self.get_pg_connection()
-        if pg_conn:
-            try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("SELECT MAX(episode_number) FROM episodes WHERE anime_id = %s;", (anime_id,))
-                    res = cur.fetchone()[0]
-                    pg_conn.close()
-                    return res if res is not None else 0
-            except Exception:
-                pass
-
-        with self._lock:
-            conn = self.get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT MAX(episode_number) FROM episodes WHERE anime_id = ?;", (anime_id,))
-            res = cursor.fetchone()[0]
-            conn.close()
-            return res if res is not None else 0
+        eps = self._episodes_cache.get(anime_id, [])
+        return max([e["episode_number"] for e in eps]) if eps else 0
 
     # ==========================================
     # JSON Export & PostgreSQL Sync
     # ==========================================
     def export_to_json(self, json_path: str = "data/animes.json"):
-        """Barcha anime va epizodlar ma'lumotlarini JSON formatda faylga va PostgreSQL animes_json jadvaliga saqlash"""
+        """Barcha ma'lumotlarni faylga va PostgreSQL animes_json ga fonda saqlash"""
         try:
             full_path = os.path.join(os.path.dirname(__file__), json_path)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -684,7 +627,6 @@ class Database:
             data = []
             for a in animes:
                 anime_dict = dict(a)
-                # datetime obyektlarini str ga o'tkazish
                 if "created_at" in anime_dict and not isinstance(anime_dict["created_at"], str):
                     anime_dict["created_at"] = str(anime_dict["created_at"])
                 anime_dict["episodes"] = self.get_episodes(a["id"])
@@ -696,23 +638,6 @@ class Database:
             with open(full_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-            # PostgreSQL dagi animes_json jadvaliga JSONB formatda to'liq saqlash
-            pg_conn = self.get_pg_connection()
-            if pg_conn:
-                try:
-                    with pg_conn.cursor() as cur:
-                        for item in data:
-                            cur.execute("""
-                            INSERT INTO animes_json (anime_id, title, data, updated_at)
-                            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-                            ON CONFLICT (anime_id) DO UPDATE SET
-                                title = EXCLUDED.title,
-                                data = EXCLUDED.data,
-                                updated_at = CURRENT_TIMESTAMP;
-                            """, (item["id"], item["title"], json.dumps(item, ensure_ascii=False)))
-                    pg_conn.commit()
-                    pg_conn.close()
-                except Exception:
-                    pass
+            self._pg_queue.put(("export_json", (data,)))
         except Exception:
             pass

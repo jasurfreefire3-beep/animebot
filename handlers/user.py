@@ -12,7 +12,8 @@ from aiogram.types import (
     InlineQueryResultCachedVideo,
     InputTextMessageContent,
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
+    ChosenInlineResult
 )
 from aiogram.filters import CommandStart, CommandObject, Command
 
@@ -55,7 +56,6 @@ async def inline_anime_search(inline_query: InlineQuery):
     else:
         animes = db.search_animes(query)[:30]
 
-    bot_info = await inline_query.bot.get_me()
     results = []
 
     for a in animes:
@@ -64,52 +64,57 @@ async def inline_anime_search(inline_query: InlineQuery):
         year = a.get("year", 2024)
         genres = a.get("genres", "")
         title = a["title"]
-        views = a.get("views", 0)
+        media_type = a.get("media_type", "photo")
+        media_file_id = a.get("media_file_id")
 
         ep_str = f"{ep_count} / {ep_count} epizod" if ep_count > 0 else "0 epizod (Tez kunda)"
-        card_text = (
-            f"📕 <b>{title}</b>\n\n"
-            f"<blockquote>{genres} ”</blockquote>\n"
-            f"<blockquote>📺 {ep_str} ”</blockquote>\n"
-            f"<blockquote>📦 {a.get('duration_per_ep', '24 daq.')} • 📅 {year} ”</blockquote>\n"
-            f"<blockquote>👁️ {views} marta ko'rildi ”</blockquote>"
-        )
+        # Autostart tashlaydigan formatdagi to'liq ramkali matn
+        card_text = format_anime_card_text(a, ep_count)
+        # Autostart dagi xuddi o'sha yashil 'Tomosha qilish' tugmasi
+        kb = get_anime_card_kb(anime_id, ep_count)
 
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"▶️ Tomosha qilish ( {ep_count} epizod )" if ep_count > 0 else "▶️ Tomosha qilish (Tez kunda)",
-                    url=f"https://t.me/{bot_info.username}?start=anime_{anime_id}"
-                )
-            ]
-        ])
-
-        desc = f"📅 {year}-yil • 📺 {ep_count} ep • 🏷️ {genres}"
+        desc = f"📅 {year}-yil • 📺 {ep_str} • 🏷️ {genres}"
         if len(desc) > 85:
             desc = desc[:82] + "..."
 
-        media_file_id = a.get("media_file_id")
-        thumb_url = await get_telegram_thumb_url(inline_query.bot, media_file_id)
-
-        # Rasm xabar tepasida chiqishi va uning ostida anime nomi va ma'lumotlari turishi uchun
-        msg_text = card_text
-        if thumb_url:
-            msg_text = f'<a href="{thumb_url}">&#8205;</a>' + card_text
-
-        # Inline qidiruvda: Rasm ham, uning ostida / yonida Anime Nomi va ma'lumotlari ham to'liq chiqadi
-        results.append(
-            InlineQueryResultArticle(
-                id=f"anime_{anime_id}",
-                title=f"🎬 {title} ({year})",
-                description=desc,
-                thumbnail_url=thumb_url,
-                input_message_content=InputTextMessageContent(
-                    message_text=msg_text,
-                    parse_mode="HTML"
-                ),
-                reply_markup=kb
+        # Foydalanuvchi tanlaganda autostart dagi kabi to'liq rasm/video karta va tugmasi bilan tashlaydi
+        if media_type == "video" and media_file_id:
+            results.append(
+                InlineQueryResultCachedVideo(
+                    id=f"anime_{anime_id}",
+                    video_file_id=media_file_id,
+                    title=f"🎬 {title} ({year})",
+                    description=desc,
+                    caption=card_text,
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
             )
-        )
+        elif media_file_id:
+            results.append(
+                InlineQueryResultCachedPhoto(
+                    id=f"anime_{anime_id}",
+                    photo_file_id=media_file_id,
+                    title=f"🎬 {title} ({year})",
+                    description=desc,
+                    caption=card_text,
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+            )
+        else:
+            results.append(
+                InlineQueryResultArticle(
+                    id=f"anime_{anime_id}",
+                    title=f"🎬 {title} ({year})",
+                    description=desc,
+                    input_message_content=InputTextMessageContent(
+                        message_text=card_text,
+                        parse_mode="HTML"
+                    ),
+                    reply_markup=kb
+                )
+            )
 
     if query and not animes:
         results.append(
@@ -124,7 +129,17 @@ async def inline_anime_search(inline_query: InlineQuery):
             )
         )
 
-    await inline_query.answer(results, cache_time=5, is_personal=True)
+    await inline_query.answer(results, cache_time=2, is_personal=True)
+
+@user_router.chosen_inline_result()
+async def chosen_inline_handler(chosen: ChosenInlineResult):
+    """Inline qidiruvdan anime tanlanganda ko'rishlar sonini oshirish"""
+    try:
+        if chosen.result_id.startswith("anime_"):
+            aid = int(chosen.result_id.replace("anime_", ""))
+            db.increment_views(aid)
+    except Exception:
+        pass
 
 # --- /search yoki /qidiruv buyrug'i ---
 @user_router.message(Command("search"))
@@ -317,13 +332,23 @@ async def play_episode(callback: CallbackQuery, anime_id: int, episode_number: i
     if ep and ep.get("video_file_id"):
         video_id = ep["video_file_id"]
         try:
-            # Agar mavjud xabarda video bo'lsa, uning mediasini almashtiramiz
-            await callback.message.edit_media(
-                media=InputMediaVideo(media=video_id, caption=player_text, parse_mode="HTML", cover=cover),
-                reply_markup=kb
-            )
-            db.set_user_last_msg(callback.from_user.id, callback.message.message_id)
+            if callback.inline_message_id:
+                await callback.bot.edit_message_media(
+                    inline_message_id=callback.inline_message_id,
+                    media=InputMediaVideo(media=video_id, caption=player_text, parse_mode="HTML", cover=cover),
+                    reply_markup=kb
+                )
+            elif callback.message:
+                await callback.message.edit_media(
+                    media=InputMediaVideo(media=video_id, caption=player_text, parse_mode="HTML", cover=cover),
+                    reply_markup=kb
+                )
+                db.set_user_last_msg(callback.from_user.id, callback.message.message_id)
         except Exception:
+            if callback.inline_message_id:
+                bot_info = await callback.bot.get_me()
+                await callback.answer(url=f"https://t.me/{bot_info.username}?start=anime_{anime_id}")
+                return
             # Agar edit qilib bo'lmasa, eski xabarni o'chirib, yangisini yuboramiz
             try:
                 await callback.message.delete()
@@ -350,13 +375,25 @@ async def play_episode(callback: CallbackQuery, anime_id: int, episode_number: i
     else:
         # Agar qism videosi topilmasa, captionni yangilaymiz
         try:
-            await callback.message.edit_caption(
-                caption=player_text,
-                parse_mode="HTML",
-                reply_markup=kb
-            )
-            db.set_user_last_msg(callback.from_user.id, callback.message.message_id)
+            if callback.inline_message_id:
+                await callback.bot.edit_message_caption(
+                    inline_message_id=callback.inline_message_id,
+                    caption=player_text,
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+            elif callback.message:
+                await callback.message.edit_caption(
+                    caption=player_text,
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+                db.set_user_last_msg(callback.from_user.id, callback.message.message_id)
         except Exception:
+            if callback.inline_message_id:
+                bot_info = await callback.bot.get_me()
+                await callback.answer(url=f"https://t.me/{bot_info.username}?start=anime_{anime_id}")
+                return
             try:
                 await callback.message.delete()
             except Exception:
@@ -384,8 +421,14 @@ async def page_navigate_callback(callback: CallbackQuery):
     kb = get_episode_grid_kb(anime_id, current_ep, ep_numbers, page=page)
 
     try:
-        await callback.message.edit_reply_markup(reply_markup=kb)
-        db.set_user_last_msg(callback.from_user.id, callback.message.message_id)
+        if callback.inline_message_id:
+            await callback.bot.edit_message_reply_markup(
+                inline_message_id=callback.inline_message_id,
+                reply_markup=kb
+            )
+        elif callback.message:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+            db.set_user_last_msg(callback.from_user.id, callback.message.message_id)
     except Exception:
         pass
     await callback.answer()
@@ -408,19 +451,26 @@ async def back_to_card_callback(callback: CallbackQuery):
     chat_id = callback.message.chat.id if callback.message else None
     cover = await get_fast_banner_cover(callback.bot, chat_id=chat_id)
 
+    media_obj = InputMediaVideo(media=media_file_id, caption=card_text, parse_mode="HTML", cover=cover) if media_type == "video" else InputMediaPhoto(media=media_file_id, caption=card_text, parse_mode="HTML")
+
     try:
-        if media_type == "video":
-            await callback.message.edit_media(
-                media=InputMediaVideo(media=media_file_id, caption=card_text, parse_mode="HTML", cover=cover),
+        if callback.inline_message_id:
+            await callback.bot.edit_message_media(
+                inline_message_id=callback.inline_message_id,
+                media=media_obj,
                 reply_markup=kb
             )
-        else:
+        elif callback.message:
             await callback.message.edit_media(
-                media=InputMediaPhoto(media=media_file_id, caption=card_text, parse_mode="HTML"),
+                media=media_obj,
                 reply_markup=kb
             )
-        db.set_user_last_msg(callback.from_user.id, callback.message.message_id)
+            db.set_user_last_msg(callback.from_user.id, callback.message.message_id)
     except Exception:
+        if callback.inline_message_id:
+            bot_info = await callback.bot.get_me()
+            await callback.answer(url=f"https://t.me/{bot_info.username}?start=anime_{anime_id}")
+            return
         # Agar edit qilib bo'lmasa, eski xabarni o'chirib, yangi yuboramiz
         try:
             await callback.message.delete()
