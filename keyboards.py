@@ -122,12 +122,13 @@ def get_anime_card_kb(anime_id: int, total_episodes: int) -> InlineKeyboardMarku
 
 def get_episode_grid_kb(anime_id: int, current_ep: int, episode_numbers: list, page: int = 1, per_page: int = 12) -> InlineKeyboardMarkup:
     """
-    2-rasmdagi ko'rinish:
-    12 talik disklardan iborat rangli epizodlar paneli va sahifalash (pagination)
+    Epizodlar paneli va sahifalash:
+    Hozirgi ko'rilayotgan epizod tugmasi KO'K rangda (style='primary'),
+    qolgan barcha epizod tugmalari esa RANGSIZ bo'ladi.
     """
     if not episode_numbers:
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Orqaga", callback_data=f"card_{anime_id}", style="primary")]
+            [InlineKeyboardButton(text="🔙 Orqaga", callback_data=f"card_{anime_id}")]
         ])
 
     total_episodes = len(episode_numbers)
@@ -141,18 +142,19 @@ def get_episode_grid_kb(anime_id: int, current_ep: int, episode_numbers: list, p
     keyboard = []
     row = []
 
-    # Epizodlarni 3 tadan qilib qatorga terish (Ko'k va Yashil ranglar bilan)
+    # Epizodlarni 3 tadan qilib qatorga terish:
+    # Tanlangan epizod KO'K (style='primary'), qolganlari esa RANGSIZ bo'ladi
     for ep_num in page_episodes:
         if ep_num == current_ep:
-            # Hozirgi tanlangan qism yashil (success) rangda
+            # Hozir tomosha qilinayotgan epizod KO'K rangda
             btn_text = f"▶️ {ep_num} ep"
-            btn_style = "success"
+            btn = InlineKeyboardButton(text=btn_text, callback_data=f"ep_{anime_id}_{ep_num}_{page}", style="primary")
         else:
-            # Boshqa qismlar moviy/ko'k (primary) rangda
+            # Qolgan barcha epizodlar RANGSIZ
             btn_text = f"💿 {ep_num} ep"
-            btn_style = "primary"
+            btn = InlineKeyboardButton(text=btn_text, callback_data=f"ep_{anime_id}_{ep_num}_{page}")
 
-        row.append(InlineKeyboardButton(text=btn_text, callback_data=f"ep_{anime_id}_{ep_num}_{page}", style=btn_style))
+        row.append(btn)
 
         if len(row) == 3:
             keyboard.append(row)
@@ -161,26 +163,25 @@ def get_episode_grid_kb(anime_id: int, current_ep: int, episode_numbers: list, p
     if row:
         keyboard.append(row)
 
-    # Sahifalash (Pagination) qatori: Oldingi/Keyingi doim ko'k (primary), o'rtadagi 1/15 yashil (success)
+    # Sahifalash (Pagination) qatori - barchasi rangsiz
     nav_row = []
     if page > 1:
-        nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"page_{anime_id}_{current_ep}_{page - 1}", style="primary"))
+        nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"page_{anime_id}_{current_ep}_{page - 1}"))
     else:
-        nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data="noop", style="primary"))
+        nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data="noop"))
 
-    # 2-rasmdagi kabi markaziy sahifa ko'rsatkichi yashil rangda
-    nav_row.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop", style="success"))
+    nav_row.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop"))
 
     if page < total_pages:
-        nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"page_{anime_id}_{current_ep}_{page + 1}", style="primary"))
+        nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"page_{anime_id}_{current_ep}_{page + 1}"))
     else:
-        nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data="noop", style="primary"))
+        nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data="noop"))
 
     keyboard.append(nav_row)
 
-    # Asosiy kartaga qaytish tugmasi qizil (danger) rangda
+    # Asosiy kartaga qaytish tugmasi
     keyboard.append([
-        InlineKeyboardButton(text="📕 Anime ma'lumotlariga qaytish", callback_data=f"card_{anime_id}", style="danger")
+        InlineKeyboardButton(text="📕 Anime ma'lumotlariga qaytish", callback_data=f"card_{anime_id}")
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)

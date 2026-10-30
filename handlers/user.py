@@ -78,44 +78,22 @@ async def inline_anime_search(inline_query: InlineQuery):
         if len(desc) > 85:
             desc = desc[:82] + "..."
 
-        # Foydalanuvchi tanlaganda autostart dagi kabi to'liq rasm/video karta va tugmasi bilan tashlaydi
-        if media_type == "video" and media_file_id:
-            results.append(
-                InlineQueryResultCachedVideo(
-                    id=f"anime_{anime_id}",
-                    video_file_id=media_file_id,
-                    title=f"🎬 {title} ({year})",
-                    description=desc,
-                    caption=card_text,
-                    parse_mode="HTML",
-                    reply_markup=kb
-                )
+        thumb_url = await get_telegram_thumb_url(inline_query.bot, media_file_id)
+
+        # Inline ro'yxatda: Rasm ham, uning yonida qalin harflar bilan Anime Nomi va yili ham chiqadi
+        results.append(
+            InlineQueryResultArticle(
+                id=f"anime_{anime_id}",
+                title=f"🎬 {title} ({year})",
+                description=desc,
+                thumbnail_url=thumb_url,
+                input_message_content=InputTextMessageContent(
+                    message_text=f"🎬 <b>{title}</b> ({year})",
+                    parse_mode="HTML"
+                ),
+                reply_markup=kb
             )
-        elif media_file_id:
-            results.append(
-                InlineQueryResultCachedPhoto(
-                    id=f"anime_{anime_id}",
-                    photo_file_id=media_file_id,
-                    title=f"🎬 {title} ({year})",
-                    description=desc,
-                    caption=card_text,
-                    parse_mode="HTML",
-                    reply_markup=kb
-                )
-            )
-        else:
-            results.append(
-                InlineQueryResultArticle(
-                    id=f"anime_{anime_id}",
-                    title=f"🎬 {title} ({year})",
-                    description=desc,
-                    input_message_content=InputTextMessageContent(
-                        message_text=card_text,
-                        parse_mode="HTML"
-                    ),
-                    reply_markup=kb
-                )
-            )
+        )
 
     if query and not animes:
         results.append(
