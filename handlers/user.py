@@ -132,13 +132,17 @@ async def inline_anime_search(inline_query: InlineQuery):
 
     await inline_query.answer(results, cache_time=2, is_personal=True)
 
+_last_chosen_anime: dict = {}
+
 @user_router.chosen_inline_result()
 async def chosen_inline_handler(chosen: ChosenInlineResult):
-    """Inline qidiruvdan anime tanlanganda ko'rishlar sonini oshirish"""
+    """Inline qidiruvdan anime tanlanganda ko'rishlar sonini oshirish va xotiraga olish"""
     try:
         if chosen.result_id.startswith("anime_"):
             aid = int(chosen.result_id.replace("anime_", ""))
             db.increment_views(aid)
+            if chosen.from_user:
+                _last_chosen_anime[chosen.from_user.id] = aid
     except Exception:
         pass
 
@@ -604,17 +608,57 @@ async def noop_callback(callback: CallbackQuery):
 async def clean_or_search_messages(message: Message):
     """
     Agar foydalanuvchi anime nomini qidirib matn yozsa, bazadan qidirib ro'yxat chiqaradi.
-    Inline qidiruv natijalarini (via_bot) aslo o'chirmasdan saqlab qoladi.
+    Inline qidiruvdan tanlanganda (via_bot) chiqqan xabarni darhol o'chirib, botning O'ZI rasmiy xabar qilib tashlaydi.
     Boshqa barcha keraksiz narsalarni darhol o'chiradi.
     """
     user_id = message.from_user.id if message.from_user else None
+    chat_type = message.chat.type if message.chat else ""
 
-    # 1. AGAR XABAR INLINE QIDIRUV ORQALI YUBORILGAN BO'LSA (via_bot):
-    # Bu foydalanuvchi tanlagan anime kartasi! Uni ASLO o'chirmaymiz!
+    # 1. AGAR XABAR INLINE QIDIRUV ORQALI YUBORILGAN BO'LSA (via @Animem_uz_bot):
     if message.via_bot:
-        if user_id:
+        if chat_type == "private" and user_id:
+            # 1. Anime ID sini aniqlash
+            anime_id = None
+            if message.reply_markup and message.reply_markup.inline_keyboard:
+                for row in message.reply_markup.inline_keyboard:
+                    for btn in row:
+                        if btn.callback_data and btn.callback_data.startswith("watch_"):
+                            try:
+                                anime_id = int(btn.callback_data.split("_")[1])
+                                break
+                            except (IndexError, ValueError):
+                                pass
+                        elif btn.url and "start=anime_" in btn.url:
+                            try:
+                                anime_id = int(btn.url.split("start=anime_")[1].split("&")[0])
+                                break
+                            except (IndexError, ValueError):
+                                pass
+                    if anime_id:
+                        break
+
+            if anime_id is None:
+                anime_id = _last_chosen_anime.get(user_id)
+
+            if anime_id is None and message.caption:
+                # Captionning birinchi qatoridagi nom bo'yicha qidirish
+                first_line = message.caption.split("\n")[0].replace("📕", "").strip()
+                matches = db.search_animes(first_line)
+                if matches:
+                    anime_id = matches[0]["id"]
+
+            # 2. 'via @Animem_uz_bot' deb chiqqan xabarni DARHOL O'CHIRIB TASHLAYMIZ!
+            try:
+                await message.delete()
+            except Exception:
+                pass
+
+            # 3. Avvalgi bot xabarini tozalaymiz
             await clean_previous_bot_message(message.bot, message.chat.id, user_id)
-            db.set_user_last_msg(user_id, message.message_id)
+
+            # 4. Endi botning O'ZI to'g'ridan-to'g'ri rasmiy xabar qilib kartani tashlab beradi!
+            if anime_id:
+                await send_anime_card(message, anime_id, user_id=user_id)
         return
 
     # 2. Oddiy foydalanuvchi yozgan xabarlar:
