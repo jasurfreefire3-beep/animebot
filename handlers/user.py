@@ -1,4 +1,5 @@
 import os
+import urllib.request
 from typing import Optional, List, Dict, Any
 from aiogram import Router, F
 from aiogram.types import (
@@ -31,19 +32,64 @@ user_router = Router()
 db = Database()
 
 # --- Kesh: Telegram rasmlari URL manzillari ---
-_thumb_cache: dict = {}
+_thumb_cache: dict = {
+    "AgACAgIAAxkBAAMLauNlk_o72T_Y5-dh00IUq1XBxcYAAg8iaxtZ5BhLbKnA8VRW6-YBAAMCAAN5AAM9BA": "https://files.catbox.moe/rg5kju.jpg"
+}
+
+def upload_to_catbox(file_bytes: bytes) -> Optional[str]:
+    """Catbox.moe ga yuklab, Telegram inline qidiruv uchun toza HTTPS CDN rasm URL olish"""
+    try:
+        boundary = '----WebKitFormBoundary' + os.urandom(8).hex()
+        body = (
+            f'--{boundary}\r\n'
+            f'Content-Disposition: form-data; name="reqtype"\r\n\r\n'
+            f'fileupload\r\n'
+            f'--{boundary}\r\n'
+            f'Content-Disposition: form-data; name="fileToUpload"; filename="thumb.jpg"\r\n'
+            f'Content-Type: image/jpeg\r\n\r\n'
+        ).encode('utf-8') + file_bytes + f'\r\n--{boundary}--\r\n'.encode('utf-8')
+
+        req = urllib.request.Request(
+            'https://catbox.moe/user/api.php',
+            data=body,
+            headers={'Content-Type': f'multipart/form-data; boundary={boundary}', 'User-Agent': 'Mozilla/5.0'}
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            url = resp.read().decode('utf-8').strip()
+            if url.startswith('http'):
+                return url
+    except Exception:
+        pass
+    return None
 
 async def get_telegram_thumb_url(bot, file_id: str):
-    """Inline qidiruvda animening haqiqiy muqova rasmini ko'rsatish uchun URL olish"""
+    """Inline qidiruvda animening haqiqiy muqova rasmini ko'rsatish uchun toza CDN URL olish"""
     if not file_id:
         return None
     if file_id in _thumb_cache:
         return _thumb_cache[file_id]
+
+    # Bazadan tekshirish
+    db_thumb = db.get_setting(f"thumb_{file_id}")
+    if db_thumb:
+        _thumb_cache[file_id] = db_thumb
+        return db_thumb
+
     try:
         f = await bot.get_file(file_id)
-        url = f"https://api.telegram.org/file/bot{bot.token}/{f.file_path}"
-        _thumb_cache[file_id] = url
-        return url
+        file_url = f"https://api.telegram.org/file/bot{bot.token}/{f.file_path}"
+        req = urllib.request.Request(file_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = resp.read()
+
+        catbox_url = upload_to_catbox(data)
+        if catbox_url:
+            _thumb_cache[file_id] = catbox_url
+            db.set_setting(f"thumb_{file_id}", catbox_url)
+            return catbox_url
+
+        _thumb_cache[file_id] = file_url
+        return file_url
     except Exception:
         return None
 
@@ -87,6 +133,8 @@ async def inline_anime_search(inline_query: InlineQuery):
                 title=f"🎬 {title} ({year})",
                 description=desc,
                 thumbnail_url=thumb_url,
+                thumbnail_width=100,
+                thumbnail_height=100,
                 input_message_content=InputTextMessageContent(
                     message_text=f"🎬 <b>{title}</b> ({year})",
                     parse_mode="HTML"

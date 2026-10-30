@@ -163,25 +163,26 @@ def get_episode_grid_kb(anime_id: int, current_ep: int, episode_numbers: list, p
     if row:
         keyboard.append(row)
 
-    # Sahifalash (Pagination) qatori - barchasi rangsiz
+    # Sahifalash (Pagination) qatori:
+    # Oldingi va Keyingi tugmalar KO'K (primary), o'rtadagi sahifa ko'rsatkichi YASHIL (success)
     nav_row = []
     if page > 1:
-        nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"page_{anime_id}_{current_ep}_{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"page_{anime_id}_{current_ep}_{page - 1}", style="primary"))
     else:
-        nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data="noop"))
+        nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data="noop", style="primary"))
 
-    nav_row.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop"))
+    nav_row.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop", style="success"))
 
     if page < total_pages:
-        nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"page_{anime_id}_{current_ep}_{page + 1}"))
+        nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"page_{anime_id}_{current_ep}_{page + 1}", style="primary"))
     else:
-        nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data="noop"))
+        nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data="noop", style="primary"))
 
     keyboard.append(nav_row)
 
-    # Asosiy kartaga qaytish tugmasi
+    # Asosiy kartaga qaytish tugmasi QIZIL (danger) rangda
     keyboard.append([
-        InlineKeyboardButton(text="📕 Anime ma'lumotlariga qaytish", callback_data=f"card_{anime_id}")
+        InlineKeyboardButton(text="📕 Anime ma'lumotlariga qaytish", callback_data=f"card_{anime_id}", style="danger")
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
