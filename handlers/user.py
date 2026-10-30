@@ -227,12 +227,15 @@ async def start_handler(message: Message, command: CommandObject):
     sent_msg = await message.answer(text, parse_mode="HTML", reply_markup=kb)
     db.set_user_last_msg(user.id, sent_msg.message_id)
 
-async def send_anime_card(message: Message, anime_id: int):
-    user_id = message.from_user.id
+async def send_anime_card(message: Message, anime_id: int, user_id: Optional[int] = None):
+    if user_id is None:
+        user_id = message.from_user.id if message.from_user else None
+
     anime = db.get_anime(anime_id)
     if not anime:
         sent_err = await message.answer("Kechirasiz, ushbu anime topilmadi yoki o'chirilgan.")
-        db.set_user_last_msg(user_id, sent_err.message_id)
+        if user_id:
+            db.set_user_last_msg(user_id, sent_err.message_id)
         return
 
     db.increment_views(anime_id)
@@ -271,7 +274,7 @@ async def send_anime_card(message: Message, anime_id: int):
             reply_markup=kb
         )
 
-    if sent_msg:
+    if sent_msg and user_id:
         db.set_user_last_msg(user_id, sent_msg.message_id)
 
 # --- 1-rasmdan 2-rasmga o'tish (Tomosha qilish tugmasi) ---
@@ -564,7 +567,7 @@ async def open_anime_callback(callback: CallbackQuery):
     except Exception:
         pass
 
-    await send_anime_card(callback.message, anime_id)
+    await send_anime_card(callback.message, anime_id, user_id=callback.from_user.id)
     await callback.answer()
 
 # --- Bosh sahifaga qaytish ---
@@ -600,26 +603,55 @@ async def noop_callback(callback: CallbackQuery):
 async def clean_or_search_messages(message: Message):
     """
     Agar foydalanuvchi anime nomini qidirib matn yozsa, bazadan qidirib ro'yxat chiqaradi.
+    Inline qidiruv natijalarini (via_bot) aslo o'chirmasdan saqlab qoladi.
     Boshqa barcha keraksiz narsalarni darhol o'chiradi.
     """
-    user_id = message.from_user.id
+    user_id = message.from_user.id if message.from_user else None
+
+    # 1. AGAR XABAR INLINE QIDIRUV ORQALI YUBORILGAN BO'LSA (via_bot):
+    # Bu foydalanuvchi tanlagan anime kartasi! Uni ASLO o'chirmaymiz!
+    if message.via_bot:
+        if user_id:
+            await clean_previous_bot_message(message.bot, message.chat.id, user_id)
+            db.set_user_last_msg(user_id, message.message_id)
+        return
+
+    # 2. Oddiy foydalanuvchi yozgan xabarlar:
     query = message.text.strip() if message.text else ""
 
-    # Har qanday holda user yozgan xabarni darhol o'chiramiz (tozalik uchun)
+    # User yozgan matnni o'chiramiz (chat toza turishi uchun)
     try:
         await message.delete()
     except Exception:
         pass
 
-    if query and len(query) >= 2:
-        found = db.search_animes(query)
-        if found:
-            await clean_previous_bot_message(message.bot, message.chat.id, user_id)
-            kb = get_anime_list_kb(found, page=1)
-            text = (
-                f"🔍 <b>'{query}'</b> bo'yicha topilgan animelar:\n\n"
-                f"Tomosha qilmoqchi bo'lgan animengizni tanlang yoki 'Ko'rish' tugmasini bosing:"
-            )
-            sent_msg = await message.answer(text, parse_mode="HTML", reply_markup=kb)
-            db.set_user_last_msg(user_id, sent_msg.message_id)
+    if query:
+        clean_query = query
+        try:
+            bot_info = await message.bot.get_me()
+            if clean_query.startswith(f"@{bot_info.username}"):
+                clean_query = clean_query.replace(f"@{bot_info.username}", "").strip()
+        except Exception:
+            pass
+        if clean_query.startswith("@"):
+            parts = clean_query.split(maxsplit=1)
+            clean_query = parts[1] if len(parts) > 1 else ""
+
+        if clean_query and len(clean_query) >= 2:
+            found = db.search_animes(clean_query)
+            if found:
+                if user_id:
+                    await clean_previous_bot_message(message.bot, message.chat.id, user_id)
+                # Agar aynan 1 ta anime topilsa, to'g'ridan-to'g'ri o'sha animeni ochamiz
+                if len(found) == 1:
+                    await send_anime_card(message, found[0]["id"], user_id=user_id)
+                else:
+                    kb = get_anime_list_kb(found, page=1)
+                    text = (
+                        f"🔍 <b>'{clean_query}'</b> bo'yicha topilgan animelar:\n\n"
+                        f"Tomosha qilmoqchi bo'lgan animengizni tanlang yoki 'Ko'rish' tugmasini bosing:"
+                    )
+                    sent_msg = await message.answer(text, parse_mode="HTML", reply_markup=kb)
+                    if user_id:
+                        db.set_user_last_msg(user_id, sent_msg.message_id)
 
